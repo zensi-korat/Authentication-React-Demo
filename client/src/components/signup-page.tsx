@@ -5,12 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuth } from "@/features/auth/useAuth";
 
-export function LoginPage() {
+export function SignupPage() {
   const navigate = useNavigate();
-  const { refresh } = useAuth();
-  const [email, setEmail] = useState("demo@example.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -21,25 +19,21 @@ export function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      // POSTs to our own API (the Express server, via Vite's /api proxy) so the
-      // server can set the httpOnly sb-access-token cookie — page JS never
-      // touches the token itself, which is the whole point of httpOnly.
-      const res = await fetch("/api/auth/login", {
+      // Just creates the account — no cookies are set here. The user signs
+      // in separately on /login with the credentials they just created.
+      const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
-        // The server sends { message } on failure (e.g. wrong password).
+        // The server sends { message } on failure (e.g. duplicate email).
         const body = await res.json().catch(() => null);
-        throw new Error(body?.message ?? "Login failed");
+        throw new Error(body?.message ?? "Signup failed");
       }
 
-      // Re-check auth (refetch /api/auth/me) so the AuthProvider picks up the
-      // new cookie, then navigate to the dashboard. This replaces Next's
-      // router.refresh() — there are no Server Components to re-run here.
-      await refresh();
-      navigate("/");
+      toast.success("Account created. Sign in to continue.");
+      navigate("/login");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong.";
       setError(message);
@@ -53,8 +47,8 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-2xl">Fetch API Demo</CardTitle>
-          <CardDescription>Sign in to view the consumers dashboard.</CardDescription>
+          <CardTitle className="text-2xl">Create an account</CardTitle>
+          <CardDescription>Sign up to access the consumers dashboard.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -74,11 +68,13 @@ export function LoginPage() {
               <Input
                 id="password"
                 type="password"
-                autoComplete="current-password"
+                autoComplete="new-password"
+                minLength={8}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />
+              <p className="text-xs text-muted-foreground">At least 8 characters.</p>
             </div>
             {error && (
               <p className="text-sm text-destructive" role="alert">
@@ -86,15 +82,12 @@ export function LoginPage() {
               </p>
             )}
             <Button type="submit" disabled={isSubmitting} className="mt-2">
-              {isSubmitting ? "Signing in..." : "Sign in"}
+              {isSubmitting ? "Creating account..." : "Sign up"}
             </Button>
             <p className="text-xs text-muted-foreground text-center">
-              Demo login: demo@example.com / Demo1234!
-            </p>
-            <p className="text-xs text-muted-foreground text-center">
-              Don&apos;t have an account?{" "}
-              <Link to="/signup" className="underline underline-offset-2">
-                Sign up
+              Already have an account?{" "}
+              <Link to="/login" className="underline underline-offset-2">
+                Sign in
               </Link>
             </p>
           </form>

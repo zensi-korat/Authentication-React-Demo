@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { supabaseAdmin } from "../lib/supabase-admin.js";
-import { supabaseAnon } from "../lib/supabase-anon.js";
+import { verifyAccessToken } from "../lib/jwt.js";
 
 // Demo-only table, separate from the production `consumers` table.
 const TABLE = "demo_consumers";
@@ -33,12 +33,14 @@ function consumerToRow(input) {
 }
 
 // ── Auth guard: proves the API is protected server-side, not just the UI ────
-async function requireAuth(req, res, next) {
-  const token = req.cookies["sb-access-token"];
+// Verifies the JWT LOCALLY (jwt.verify + secret) — no network call to anywhere,
+// unlike the old Supabase-backed version that had to ask Supabase's servers.
+function requireAuth(req, res, next) {
+  const token = req.cookies["access_token"];
   if (!token) return res.status(401).json({ message: "Not authenticated" });
 
-  const { data, error } = await supabaseAnon.auth.getUser(token);
-  if (error || !data.user) {
+  const payload = verifyAccessToken(token);
+  if (!payload) {
     return res.status(401).json({ message: "Not authenticated" });
   }
   next();

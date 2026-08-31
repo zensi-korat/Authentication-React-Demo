@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { AuthProvider } from "@/features/auth/useAuth";
 import { LoginPage } from "@/components/login-page";
+import { SignupPage } from "@/components/signup-page";
 import DashboardLayout from "@/pages/DashboardLayout";
 import DashboardHome from "@/pages/DashboardHome";
 import ConsumersListPage from "@/pages/ConsumersListPage";
@@ -16,6 +17,7 @@ import ConsumerEditPage from "@/pages/ConsumerEditPage";
  *
  * Route layout:
  *   /login                 -> LoginPage (public)
+ *   /signup                -> SignupPage (public)
  *   /                      -> DashboardLayout (auth-guarded shell) with:
  *     index                -> DashboardHome
  *     consumers            -> ConsumersListPage
@@ -34,6 +36,7 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/signup" element={<SignupPage />} />
             <Route path="/" element={<DashboardLayout />}>
               <Route index element={<DashboardHome />} />
               <Route path="consumers" element={<ConsumersListPage />} />

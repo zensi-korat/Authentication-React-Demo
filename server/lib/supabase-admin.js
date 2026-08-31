@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
  *
  * This bypasses Row Level Security, so it lives ONLY on the server (this
  * Express app), never in the browser bundle. Used for the consumers CRUD.
- * NOT used for auth — see supabase-anon.js.
+ * NOT used for auth — auth is hand-rolled JWTs, see lib/jwt.js.
  */
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

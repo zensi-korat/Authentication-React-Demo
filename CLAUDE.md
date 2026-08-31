@@ -5,10 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A teaching demo of the browser `fetch` API against a real backend. It is a two-part
-app: a React + Vite SPA (`client/`) and an Express API (`server/`) backed by Supabase.
+app: a React + Vite SPA (`client/`) and an Express API (`server/`). Consumer CRUD data
+is backed by Supabase; authentication is hand-rolled JWTs (no Supabase, no database).
 The whole point is to show the raw fetch flow — HTTP methods, request/response shape,
 cookie-based auth — in the plainest possible code. `HTTP-METHODS-GUIDE.md` is the
-narrative companion to the code; keep them consistent when changing fetch patterns.
+narrative companion to the fetch/HTTP code; `JWT-AUTH-FROM-SCRATCH.md` is the narrative
+companion to the auth code. Keep them consistent when changing the relevant patterns.
 
 Because it is a teaching artifact, **bias toward clarity over cleverness**. Several
 "proper" abstractions are deliberately left unused (see below) — do not wire them in
@@ -39,13 +41,20 @@ call as same-origin, so the httpOnly auth cookies are sent automatically with no
 setup and no `credentials: 'include'`. If you touch auth or fetch code, preserve the
 same-origin assumption.
 
-**Auth is cookie + Supabase, split across two clients.** On login
-(`server/routes/auth.js`), the server calls Supabase with the **anon** client and sets
-two httpOnly cookies (`sb-access-token`, `sb-refresh-token`). Every protected request
-re-validates the access-token cookie server-side. There are two Supabase clients and
-they are NOT interchangeable:
-- `server/lib/supabase-anon.js` — anon key, used **only** for auth (`signInWithPassword`, `getUser`). Applies normal Supabase auth rules.
-- `server/lib/supabase-admin.js` — service-role key, bypasses Row Level Security, used for consumer CRUD. Server-only; must never reach the browser bundle.
+**Auth is cookie + hand-rolled JWT, entirely separate from the consumer data store.**
+On login (`server/routes/auth.js`), the server checks the password with
+`bcrypt.compare` against `server/lib/users.js` (an in-memory, hardcoded user list —
+no database), then signs two JWTs locally with `server/lib/jwt.js`
+(`JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` from env) and sets them as httpOnly
+cookies (`access_token`, 15min; `refresh_token`, 30 days). Every protected request
+re-verifies the access-token cookie **locally** via `jwt.verify` — no network call,
+unlike a delegated-auth provider. `POST /api/auth/signup` adds a new user to the
+same in-memory list (bcrypt-hashed, no auto-login); `POST /api/auth/refresh` trades a
+valid refresh-token cookie for a new access-token cookie without re-entering a
+password. See `JWT-AUTH-FROM-SCRATCH.md` for the full concept walkthrough.
+`server/lib/supabase-admin.js` (service-role key, bypasses Row Level Security) is
+used **only** for consumer CRUD against `demo_consumers` — it has nothing to do with
+auth and must never reach the browser bundle.
 
 **Auth is enforced in two places.** `server/routes/consumers.js` guards every route
 with a `requireAuth` middleware (the real enforcement). The client's
