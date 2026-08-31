@@ -1,0 +1,15 @@
+{
+  "name": "fetch-api-demo-react-server",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env --watch index.js",
+    "start": "node --env-file=.env index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.111.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2"
+  }
+}
