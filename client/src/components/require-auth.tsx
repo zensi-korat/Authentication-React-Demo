@@ -14,6 +14,7 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   }, [isLoading, user, navigate]);
 
   if (isLoading) {
+    // Still waiting on /api/auth/me — show a placeholder, not a redirect.
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
         <div className="flex flex-col gap-3 w-64">

@@ -1,4 +1,3 @@
-
 import { createContext, useContext, useEffect, useState } from "react";
 
 interface AuthUser {
@@ -21,10 +20,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const load = async () => {
     try {
-      // Same-origin request, so the httpOnly sb-access-token cookie is sent
-      // automatically by the browser — no `credentials: 'include'` needed.
-      // That option only matters for CROSS-origin requests (a different
-      // host/port), where browsers withhold cookies unless you opt in.
+      // Same-origin request (via the Vite proxy), so the httpOnly access_token
+      // cookie is sent automatically by the browser — no manual header, no
+      // token read from anywhere in this code. We just ask the server.
       const res = await fetch("/api/auth/me");
       if (!res.ok) throw new Error("Not authenticated");
       const data: { user: AuthUser } = await res.json();

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { findUserByEmail, findUserById, addUser } from "../lib/users.js";
+import { supabaseAdmin } from "../lib/supabase-admin.js";
 import {
   signAccessToken,
   signRefreshToken,
@@ -8,6 +8,11 @@ import {
   verifyRefreshToken,
 } from "../lib/jwt.js";
 
+// Rebuilding from scratch, one piece at a time, this time backed by a real
+// Supabase table instead of an in-memory array. Each route below is an empty
+// stub — we'll fill them in together as we cover each concept.
+
+const USERS_TABLE = "demo_users";
 const ACCESS_TOKEN_COOKIE = "access_token";
 const REFRESH_TOKEN_COOKIE = "refresh_token";
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
@@ -18,12 +23,12 @@ export const authRouter = Router();
 /**
  * POST /api/auth/signup — body: { email, password }
  *
- * Creates a new account and hashes the password with bcrypt before storing
- * it — the server never keeps the plaintext password anywhere, even in
- * memory, past this request. Does NOT log the user in; they head to /login
- * afterward with their new credentials, same as most real signup flows.
+ * Same shape as our old in-memory version, but the user now lives in a real
+ * Postgres row via Supabase instead of a JS array. The password is hashed
+ * with bcrypt BEFORE it ever reaches the database — Postgres only ever sees
+ * `password_hash`, never the plaintext.
  */
-authRouter.post("/signup", (req, res) => {
+authRouter.post("/signup", async (req, res) => {
   const { email, password } = req.body ?? {};
 
   if (typeof email !== "string" || !email.includes("@")) {
@@ -32,17 +37,32 @@ authRouter.post("/signup", (req, res) => {
   if (typeof password !== "string" || password.length < 8) {
     return res.status(400).json({ message: "Password must be at least 8 characters" });
   }
-  if (findUserByEmail(email)) {
-    return res.status(409).json({ message: "An account with that email already exists" });
-  }
 
   const passwordHash = bcrypt.hashSync(password, 10);
-  addUser({ email, passwordHash });
+
+  const { error } = await supabaseAdmin
+    .from(USERS_TABLE)
+    .insert({ email, password_hash: passwordHash });
+
+  if (error) {
+    // Postgres error code 23505 = unique constraint violation — our `email
+    // text not null unique` column already rejects the duplicate for us.
+    if (error.code === "23505") {
+      return res.status(409).json({ message: "An account with that email already exists" });
+    }
+    return res.status(500).json({ message: error.message });
+  }
 
   res.status(201).json({ message: "Account created" });
 });
 
-/** POST /api/auth/login — body: { email, password } */
+/**
+ * POST /api/auth/login — body: { email, password }
+ *
+ * Looks the user up by email, checks the password with bcrypt, and — if it
+ * matches — signs a JWT and sets it as an httpOnly cookie. The response body
+ * NEVER contains the token itself; only the cookie does.
+ */
 authRouter.post("/login", async (req, res) => {
   const { email, password } = req.body ?? {};
 
@@ -50,18 +70,30 @@ authRouter.post("/login", async (req, res) => {
     return res.status(401).json({ message: "Invalid email or password" });
   }
 
-  const user = findUserByEmail(email);
-  const passwordMatches = user && bcrypt.compareSync(password, user.passwordHash);
+  const { data: user, error } = await supabaseAdmin
+    .from(USERS_TABLE)
+    .select("id, email, password_hash")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  const passwordMatches = user && bcrypt.compareSync(password, user.password_hash);
 
   if (!passwordMatches) {
+    // Deliberately the SAME message whether the email doesn't exist or the
+    // password is wrong — telling an attacker which one is true would leak
+    // which emails are registered.
     return res.status(401).json({ message: "Invalid email or password" });
   }
 
-  const accessToken = signAccessToken(user);
-  const refreshToken = signRefreshToken(user);
+  const accessToken = signAccessToken({ id: user.id, email: user.email });
+  const refreshToken = signRefreshToken({ id: user.id });
 
-  // httpOnly = page JS can't read the token (anti-theft). Express cookie
-  // maxAge is in MILLISECONDS.
+  // httpOnly = page JS can't read this cookie (anti-theft). maxAge is in
+  // MILLISECONDS for Express, matching each token's own expiry.
   res.cookie(ACCESS_TOKEN_COOKIE, accessToken, {
     httpOnly: true,
     sameSite: "lax",
@@ -78,7 +110,7 @@ authRouter.post("/login", async (req, res) => {
   res.json({ user: { id: user.id, email: user.email } });
 });
 
-/** POST /api/auth/logout — clears the auth cookies. */
+/** POST /api/auth/logout — clears both cookies. */
 authRouter.post("/logout", (_req, res) => {
   res.clearCookie(ACCESS_TOKEN_COOKIE, { path: "/" });
   res.clearCookie(REFRESH_TOKEN_COOKIE, { path: "/" });
@@ -104,11 +136,11 @@ authRouter.get("/me", (req, res) => {
 
 /**
  * POST /api/auth/refresh — trades a valid refresh-token cookie for a new
- * access-token cookie, without requiring the user to log in again. This is
- * the whole reason for having TWO tokens: the short-lived access token can
+ * access-token cookie, without requiring the password again. This is the
+ * whole reason for having TWO tokens: the short-lived access token can
  * expire often (safer) while the long-lived refresh token quietly renews it.
  */
-authRouter.post("/refresh", (req, res) => {
+authRouter.post("/refresh", async (req, res) => {
   const token = req.cookies[REFRESH_TOKEN_COOKIE];
 
   if (!token) {
@@ -116,9 +148,19 @@ authRouter.post("/refresh", (req, res) => {
   }
 
   const payload = verifyRefreshToken(token);
-  const user = payload && findUserById(payload.sub);
+  if (!payload) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
 
-  if (!user) {
+  // The refresh token only carries `sub` (the user id) — we look up the
+  // current email fresh from the database rather than trusting a stale copy.
+  const { data: user, error } = await supabaseAdmin
+    .from(USERS_TABLE)
+    .select("id, email")
+    .eq("id", payload.sub)
+    .maybeSingle();
+
+  if (error || !user) {
     return res.status(401).json({ message: "Not authenticated" });
   }
 

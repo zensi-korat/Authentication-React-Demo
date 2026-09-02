@@ -33,8 +33,7 @@ function consumerToRow(input) {
 }
 
 // ── Auth guard: proves the API is protected server-side, not just the UI ────
-// Verifies the JWT LOCALLY (jwt.verify + secret) — no network call to anywhere,
-// unlike the old Supabase-backed version that had to ask Supabase's servers.
+// Verifies the JWT LOCALLY (jwt.verify + secret) — no network call to anywhere.
 function requireAuth(req, res, next) {
   const token = req.cookies["access_token"];
   if (!token) return res.status(401).json({ message: "Not authenticated" });

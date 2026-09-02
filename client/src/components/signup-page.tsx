@@ -27,7 +27,6 @@ export function SignupPage() {
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
-        // The server sends { message } on failure (e.g. duplicate email).
         const body = await res.json().catch(() => null);
         throw new Error(body?.message ?? "Signup failed");
       }

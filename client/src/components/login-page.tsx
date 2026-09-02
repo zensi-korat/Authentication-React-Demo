@@ -10,7 +10,7 @@ import { useAuth } from "@/features/auth/useAuth";
 export function LoginPage() {
   const navigate = useNavigate();
   const { refresh } = useAuth();
-  const [email, setEmail] = useState("demo@example.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -21,23 +21,24 @@ export function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      // POSTs to our own API (the Express server, via Vite's /api proxy) so the
-      // server can set the httpOnly sb-access-token cookie — page JS never
-      // touches the token itself, which is the whole point of httpOnly.
+      // POSTs to our own API (same-origin, via the Vite proxy) so the server
+      // can set the httpOnly access_token/refresh_token cookies — page JS
+      // never touches the token itself.
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
       if (!res.ok) {
-        // The server sends { message } on failure (e.g. wrong password).
+        // fetch only rejects on network failure, NOT on 4xx/5xx — so we have
+        // to check res.ok ourselves and read the server's { message }.
         const body = await res.json().catch(() => null);
         throw new Error(body?.message ?? "Login failed");
       }
 
-      // Re-check auth (refetch /api/auth/me) so the AuthProvider picks up the
-      // new cookie, then navigate to the dashboard. This replaces Next's
-      // router.refresh() — there are no Server Components to re-run here.
+      // Re-run /api/auth/me so the AuthProvider picks up the new cookie
+      // before we navigate — otherwise RequireAuth would still think we're
+      // logged out for a moment.
       await refresh();
       navigate("/");
     } catch (err) {
@@ -88,9 +89,6 @@ export function LoginPage() {
             <Button type="submit" disabled={isSubmitting} className="mt-2">
               {isSubmitting ? "Signing in..." : "Sign in"}
             </Button>
-            <p className="text-xs text-muted-foreground text-center">
-              Demo login: demo@example.com / Demo1234!
-            </p>
             <p className="text-xs text-muted-foreground text-center">
               Don&apos;t have an account?{" "}
               <Link to="/signup" className="underline underline-offset-2">
