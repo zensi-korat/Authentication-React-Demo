@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { api } from "@/lib/axios";
 
 /** DELETE a consumer by id. */
 export function useDeleteConsumer() {
@@ -13,11 +14,7 @@ export function useDeleteConsumer() {
       // 👉 DEMO STEP 5 — DELETE (remove)
       // ══════════════════════════════════════════════════════════════════
       /*
-      const res = await fetch(`/api/consumers/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.message ?? "Failed to delete consumer");
-      }
+      await api.delete(`/consumers/${id}`);
       return;
       */
 

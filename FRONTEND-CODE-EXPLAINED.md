@@ -431,3 +431,76 @@ App.tsx
                                              redirects to /login if no user)
                              └─ actual dashboard pages
 ```
+
+---
+
+## Appendix: access token vs. refresh token, in plain terms
+
+This isn't about syntax — it's the concept behind the two cookies `login-page.tsx`'s
+successful login silently causes the server to set, and why `useAuth.tsx` only
+ever needs to worry about one of them (`access_token`, via `/api/auth/me`).
+
+### The analogy: a concert
+
+- **The wristband they give you at the door** = **access token**. You show it
+  to security *every single time* you walk between areas. Quick to check, but
+  if lost/stolen, whoever has it gets in wherever you can — for as long as
+  it's valid.
+- **Your ticket purchase confirmation / ID on file** = **refresh token**. You
+  don't show this at every checkpoint — only if your wristband is lost or
+  expires, to prove "I did buy a ticket" and get a new wristband issued.
+
+### Why not just use ONE token for everything?
+
+| If you used only ONE token... | The problem |
+|---|---|
+| Short-lived (e.g. 15 min) | Safer if stolen, but you'd have to re-enter your password every 15 minutes, forever. |
+| Long-lived (e.g. 30 days) | Convenient, but if it's ever stolen, the attacker has a valid 30-day pass to your account. |
+
+Two tokens get both properties: the one sent on *every* request (access
+token) is short-lived, so theft is only dangerous briefly. The long-lived one
+(refresh token) is sent to exactly *one* endpoint, rarely — and even if
+stolen, it only lets someone mint new short-lived access tokens, not act on
+your account directly.
+
+### Proof, from real tokens issued by this app's login
+
+Decoding both tokens from the same login response:
+
+```
+--- refresh_token ---
+payload: { sub: '...', iat: 1788424516, exp: 1791016516 }
+lifetime: 43200 minutes (30 days)
+
+--- access_token ---
+payload: { sub: '...', email: 'student@example.com', iat: 1788424516, exp: 1788425416 }
+lifetime: 15 minutes
+```
+
+Notice the refresh token's payload has *only* `sub` — no `email` — because
+it's used for exactly one narrow purpose (minting a new access token), never
+to identify you directly to the rest of the API.
+
+### What each token can and can't do (tested directly against the server)
+
+- **Refresh token sent to `/api/consumers`** → rejected (`Not authenticated`).
+  `requireAuth` only reads the `access_token` cookie by name; a refresh token
+  sitting in a different cookie is never even looked at.
+- **Refresh token manually renamed to `access_token` and sent anyway** →
+  *still* rejected. `verifyAccessToken` checks the signature against
+  `JWT_ACCESS_SECRET`, but this token was signed with `JWT_REFRESH_SECRET` —
+  different secret, signature doesn't match, `jwt.verify` throws. The two
+  token types aren't interchangeable even if you try to swap them by hand.
+- **Refresh token sent to `POST /api/auth/refresh`** → succeeds, returns a
+  brand new `access_token` cookie. This is its one legitimate job.
+
+### Summary table
+
+| | Access token | Refresh token |
+|---|---|---|
+| Job | Prove identity on every real request | Prove the session is still valid, only to mint a new access token |
+| Sent to | Every protected route | Only `POST /api/auth/refresh` |
+| Lifetime | 15 minutes | 30 days |
+| Payload | `sub`, `email` | `sub` only |
+| Signed with | `JWT_ACCESS_SECRET` | `JWT_REFRESH_SECRET` (different!) |
+| If stolen | Damage window: at most 15 min | Can only mint access tokens, not touch data directly; sent far less often |

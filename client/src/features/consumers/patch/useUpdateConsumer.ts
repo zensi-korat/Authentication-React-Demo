@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { api } from "@/lib/axios";
 
 // ── Types (kept in this file so the whole hook is self-contained) ───────────
 type AccountStatus = "active" | "delinquent" | "inactive";
@@ -33,16 +34,7 @@ export function useUpdateConsumer() {
         // 👉 DEMO STEP 4 — PATCH (partial update)
         // ══════════════════════════════════════════════════════════════
         /*
-        const res = await fetch(`/api/consumers/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input), // ONLY the changed fields
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.message ?? "Failed to update consumer");
-        }
-        const data: ConsumerResponse = await res.json();
+        const { data } = await api.patch<ConsumerResponse>(`/consumers/${id}`, input); // ONLY the changed fields
         return data.consumer;
         */
 

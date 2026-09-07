@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/features/auth/useAuth";
+import { api } from "@/lib/axios";
+import { isAxiosError } from "axios";
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -24,17 +26,11 @@ export function LoginPage() {
       // POSTs to our own API (same-origin, via the Vite proxy) so the server
       // can set the httpOnly access_token/refresh_token cookies — page JS
       // never touches the token itself.
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!res.ok) {
-        // fetch only rejects on network failure, NOT on 4xx/5xx — so we have
-        // to check res.ok ourselves and read the server's { message }.
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.message ?? "Login failed");
-      }
+      //
+      // Unlike fetch, axios throws automatically for non-2xx responses — no
+      // manual `if (!res.ok)` check needed. A wrong password (401) lands
+      // directly in the catch block below via a rejected promise.
+      await api.post("/auth/login", { email, password });
 
       // Re-run /api/auth/me so the AuthProvider picks up the new cookie
       // before we navigate — otherwise RequireAuth would still think we're
@@ -42,7 +38,11 @@ export function LoginPage() {
       await refresh();
       navigate("/");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Something went wrong.";
+      // isAxiosError narrows the type so TypeScript knows `err.response` and
+      // `err.response.data` exist — axios's own error shape, not a plain Error.
+      const message = isAxiosError<{ message?: string }>(err)
+        ? (err.response?.data?.message ?? "Login failed")
+        : "Something went wrong.";
       setError(message);
       toast.error(message);
     } finally {

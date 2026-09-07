@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { api } from "@/lib/axios";
 
 interface AuthUser {
   id: string;
@@ -23,9 +24,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Same-origin request (via the Vite proxy), so the httpOnly access_token
       // cookie is sent automatically by the browser — no manual header, no
       // token read from anywhere in this code. We just ask the server.
-      const res = await fetch("/api/auth/me");
-      if (!res.ok) throw new Error("Not authenticated");
-      const data: { user: AuthUser } = await res.json();
+      //
+      // Unlike the old fetch version, axios throws for non-2xx statuses on
+      // its own — no manual `if (!res.ok)` check needed. And if the access
+      // token happens to be expired but the refresh token is still valid,
+      // the interceptor in lib/axios.ts will silently refresh and retry this
+      // exact request before we ever see a failure here.
+      const { data } = await api.get<{ user: AuthUser }>("/auth/me");
       setUser(data.user);
     } catch {
       setUser(null);

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { api } from "@/lib/axios";
 
 // ── Types (kept in this file so the whole hook is self-contained) ───────────
 type AccountStatus = "active" | "delinquent" | "inactive";
@@ -18,7 +19,7 @@ interface ConsumerResponse {
   consumer: Consumer;
 }
 
-/** GET a single consumer by id with a plain `fetch`. */
+/** GET a single consumer by id. */
 export function useConsumerDetail(id: string) {
   const [consumer, setConsumer] = useState<Consumer | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -40,14 +41,8 @@ export function useConsumerDetail(id: string) {
       setError(null);
       try {
         // The id is dropped into the URL path (a "route parameter").
-        const res = await fetch(`/api/consumers/${id}`);
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.message ?? "Failed to load consumer");
-        }
-        const data: ConsumerResponse = await res.json();
+        const { data } = await api.get<ConsumerResponse>(`/consumers/${id}`);
         if (!ignore) setConsumer(data.consumer);
-
       } catch (err) {
 
         if (!ignore) {

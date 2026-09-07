@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/useAuth";
+import { api } from "@/lib/axios";
 
 const PAGE_TITLES: Record<string, string> = {
   "/": "Dashboard",
@@ -34,8 +35,7 @@ export function DashboardHeader() {
 
   async function handleLogout() {
     try {
-      const res = await fetch("/api/auth/logout", { method: "POST" });
-      if (!res.ok) throw new Error("Logout failed");
+      await api.post("/auth/logout");
       await refresh();
       navigate("/login");
     } catch {
@@ -77,7 +77,7 @@ export function DashboardHeader() {
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled>
               <User className="mr-2 size-4" aria-hidden="true" />
-              Authenticated via Supabase
+              Authenticated via JWT
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout}>

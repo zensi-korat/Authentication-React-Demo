@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { api } from "@/lib/axios";
+import { isAxiosError } from "axios";
 
 export function SignupPage() {
   const navigate = useNavigate();
@@ -21,20 +23,14 @@ export function SignupPage() {
     try {
       // Just creates the account — no cookies are set here. The user signs
       // in separately on /login with the credentials they just created.
-      const res = await fetch("/api/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.message ?? "Signup failed");
-      }
+      await api.post("/auth/signup", { email, password });
 
       toast.success("Account created. Sign in to continue.");
       navigate("/login");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Something went wrong.";
+      const message = isAxiosError<{ message?: string }>(err)
+        ? (err.response?.data?.message ?? "Signup failed")
+        : "Something went wrong.";
       setError(message);
       toast.error(message);
     } finally {

@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { api } from "@/lib/axios";
 
 // ── Types (kept in this file so the whole hook is self-contained) ───────────
 type AccountStatus = "active" | "delinquent" | "inactive";
@@ -33,21 +34,8 @@ export function useCreateConsumer() {
         // 👉 DEMO STEP 2 — POST (create)
         // ══════════════════════════════════════════════════════════════
         
-        const res = await fetch("/api/consumers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input),
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.message ?? "Failed to create consumer");
-        }
-        const data: ConsumerResponse = await res.json();
+        const { data } = await api.post<ConsumerResponse>("/consumers", input);
         return data.consumer;
-        
-
-        // Runs while POST is OFF (becomes unreachable once enabled above).
-        throw new Error("POST is not wired up yet — enable it in DEMO STEP 2");
       } catch (err) {
         const e = err instanceof Error ? err : new Error("Unknown error");
         setError(e);

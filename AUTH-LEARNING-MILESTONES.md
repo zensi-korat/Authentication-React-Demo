@@ -51,10 +51,13 @@ Status legend: ⬜ not started · 🔶 in progress · ✅ done
   enforcement is server-side M9), and real `fetch` calls in `login-page.tsx` /
   `signup-page.tsx`. Verified end-to-end through the Vite proxy (port 5173),
   cookies flowing correctly.
-- ⬜ **M11 — Axios + interceptors.** Migrating from raw `fetch` to `axios`; request
-  interceptors (attaching credentials) and response interceptors (catching a 401,
-  silently calling `/api/auth/refresh`, retrying the original request) — the
-  standard way real apps handle silent token refresh.
+- ✅ **M11 — Axios + interceptors.** Migrated every API call (auth + all consumer
+  CRUD hooks) to one shared `client/src/lib/axios.ts` instance. Its response
+  interceptor catches a 401, calls `POST /auth/refresh` (de-duplicated so
+  simultaneous 401s only trigger one refresh), retries the original request
+  once, and hard-redirects to `/login` only if the refresh itself fails.
+  Proven live: a request made with an already-expired access token succeeded
+  transparently — the calling code never saw the failure.
 
 ## Account lifecycle features
 

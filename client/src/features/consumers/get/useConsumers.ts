@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { api } from "@/lib/axios";
 
 // ── Types (kept in this file so the whole hook is self-contained) ───────────
 type AccountStatus = "active" | "delinquent" | "inactive";
@@ -52,18 +53,13 @@ export function useConsumers({ search, page, pageSize }: UseConsumersParams) {
       // ══════════════════════════════════════════════════════════════════
 
       try {
-        // Build the URL: /api/consumers?search=...&page=...&pageSize=...
-        const params = new URLSearchParams();
-        if (search) params.set("search", search);
-        params.set("page", String(page));
-        params.set("pageSize", String(pageSize));
-
-        const res = await fetch(`/api/consumers?${params.toString()}`);
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.message ?? "Failed to load consumers");
-        }
-        const data: ConsumersResponse = await res.json();
+        // Query params go in axios's `params` option — it builds the
+        // "?search=...&page=...&pageSize=..." string for us, and drops any
+        // key whose value is undefined (unlike URLSearchParams, which would
+        // stringify it as the literal text "undefined").
+        const { data } = await api.get<ConsumersResponse>("/consumers", {
+          params: { search: search || undefined, page, pageSize },
+        });
         if (!ignore) {
           setConsumers(data.consumers);
           setTotal(data.total);

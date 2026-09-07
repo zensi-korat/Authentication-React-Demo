@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { api } from "@/lib/axios";
 
 // ── Types (kept in this file so the whole hook is self-contained) ───────────
 type AccountStatus = "active" | "delinquent" | "inactive";
@@ -33,16 +34,7 @@ export function useReplaceConsumer() {
         // 👉 DEMO STEP 3 — PUT (full replace)
         // ══════════════════════════════════════════════════════════════
         /*
-        const res = await fetch(`/api/consumers/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input), // the WHOLE object — every field
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.message ?? "Failed to replace consumer");
-        }
-        const data: ConsumerResponse = await res.json();
+        const { data } = await api.put<ConsumerResponse>(`/consumers/${id}`, input); // the WHOLE object — every field
         return data.consumer;
         */
 
