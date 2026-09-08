@@ -162,41 +162,95 @@ using only the secret it already holds.
 `POST /api/auth/signup` (body: `{ email, password }`):
 
 1. Validates the email looks roughly right and the password is ≥8 characters.
-2. Rejects if the email is already registered (`findUserByEmail`).
-3. Hashes the password with `bcrypt.hashSync(password, 10)`.
-4. Pushes `{ id, email, passwordHash }` onto the in-memory `users` array
-   (`server/lib/users.js`) via `addUser()`.
-5. Responds `201 { message: "Account created" }` — it does **not** log the user in;
-   they're redirected to `/login` to sign in with their new credentials.
+2. Hashes the password with `bcrypt.hashSync(password, 10)`.
+3. Inserts `{ email, password_hash, email_verified: false }` into the real
+   Supabase `demo_users` table. Rejects if the email is already registered
+   (Postgres `unique` constraint, error code `23505` — no manual lookup
+   needed first).
+4. Generates and stores an OTP for this new user (see §11) and console.log's it.
+5. Responds `201 { message: "Account created. Check your email for a
+   verification code." }` — it does **not** log the user in; they're sent to
+   `/verify-email` to enter the code, then to `/login` to sign in.
 
-Because there's no database, new accounts live only in server memory and disappear
-on restart — the hardcoded demo account (`demo@example.com`) is defined directly in
-`users.js`'s source, so it always survives. Swapping the in-memory array for a real
-users table is the natural next step once you're comfortable with the mechanics here.
+Accounts now persist in Postgres across server restarts (unlike the very
+first version of this app, which used an in-memory array). But a fresh
+account still can't log in yet — `email_verified` starts `false`, and
+`POST /api/auth/login` checks that flag before issuing any tokens.
 
-## 11. Where every concept lives in the code
+## 11. OTPs — proving you own an email address
+
+A password proves you know a secret. It doesn't prove the email address you
+typed at signup actually belongs to you — anyone could type `you@company.com`
+without ever receiving mail there. A **one-time password (OTP)** closes that
+gap: a short code sent to the address, which only the real owner can read.
+
+`POST /api/auth/signup` generates one right after creating the row:
+
+```js
+const code = generateOtp();                 // "042817" — server/lib/otp.js
+insert into demo_otps { user_id, purpose: "email_verification", code_hash: hashOtp(code), expires_at }
+console.log(`Verification code for ${email}: ${code}`);
+```
+
+Three design choices carry straight over from passwords, for the same reasons:
+
+- **Hashed at rest, same as `password_hash`.** `code_hash = bcrypt.hashSync(code, 10)`
+  — if the `demo_otps` table ever leaked, the raw codes still wouldn't be
+  readable. Verifying later uses `compareOtp(submittedCode, code_hash)`
+  (`bcrypt.compareSync`), never a plaintext `===`.
+- **Short-lived.** `expires_at` is set 10 minutes out. A code that works
+  forever is a password with extra steps; a narrow window limits how long a
+  leaked code (say, from a shoulder-surfed screen) stays dangerous.
+- **Single-use.** `POST /api/auth/verify-otp` sets `consumed_at` the moment a
+  code succeeds, and every future lookup filters `consumed_at is null` — so
+  replaying the same code twice fails even before checking expiry.
+
+One more property specific to OTPs: **issuing a new code invalidates the old
+one.** `issueOtp()` marks any still-active `email_verification` row consumed
+*before* inserting the fresh one, so hitting "resend" can't leave two valid
+codes floating around — only the most recent is ever accepted.
+
+This demo has no real email service wired up on purpose (no API keys, no new
+dependency) — the code is `console.log`'d server-side instead, clearly
+labeled as where `sendEmail(...)` would go in production. Everything else
+(hash, expire, single-use, invalidate-on-reissue) is exactly what a real
+email/SMS OTP provider does under the hood.
+
+The `purpose` column (`"email_verification"` today) exists so the same
+`demo_otps` table and `issueOtp()`/verify logic can be reused for a
+completely different flow later — M13's "forgot password" is the same
+generate/hash/expire/verify dance with `purpose: "password_reset"` instead.
+
+## 12. Where every concept lives in the code
 
 | Concept | File |
 |---|---|
 | Sign/verify JWTs | `server/lib/jwt.js` |
-| User store, password hashes | `server/lib/users.js` |
-| Login, signup, logout, refresh, /me | `server/routes/auth.js` |
+| Generate/hash/compare OTP codes | `server/lib/otp.js` |
+| User store, password hashes (Supabase `demo_users` table) | `server/lib/supabase-admin.js` |
+| Signup, OTP verify/resend, login, logout, refresh, /me | `server/routes/auth.js` |
 | Route-level auth guard (`requireAuth`) | `server/routes/consumers.js` |
 | Client login form | `client/src/components/login-page.tsx` |
 | Client signup form | `client/src/components/signup-page.tsx` |
+| Client OTP verification form | `client/src/components/verify-email-page.tsx` |
 | Client auth state (`/api/auth/me` on mount) | `client/src/features/auth/useAuth.tsx` |
 | Client route guard (UX only, not security) | `client/src/components/require-auth.tsx` |
 | Same-origin proxy so cookies just work | `client/vite.config.ts` |
 
-## 12. Full request lifecycle, end to end
+## 13. Full request lifecycle, end to end
 
-1. `POST /api/auth/signup` → account created (bcrypt hash stored in memory).
-2. `POST /api/auth/login` → password checked with `bcrypt.compare` → two JWTs signed
-   → set as httpOnly cookies → `{user}` returned.
-3. `GET /api/auth/me` (on every page load) → reads `access_token` cookie →
+1. `POST /api/auth/signup` → account created in `demo_users` (bcrypt hash
+   stored, `email_verified: false`) → an OTP is generated, hashed, stored in
+   `demo_otps`, and console.log'd.
+2. `POST /api/auth/verify-otp` → code checked against the hash + expiry →
+   `demo_users.email_verified` flips to true.
+3. `POST /api/auth/login` → password checked with `bcrypt.compare` → rejected
+   with `EMAIL_NOT_VERIFIED` if step 2 hasn't happened yet → otherwise two
+   JWTs signed → set as httpOnly cookies → `{user}` returned.
+4. `GET /api/auth/me` (on every page load) → reads `access_token` cookie →
    `jwt.verify` locally → `{user}` or 401.
-4. `GET/POST/PUT/PATCH/DELETE /api/consumers*` → `requireAuth` middleware → same
+5. `GET/POST/PUT/PATCH/DELETE /api/consumers*` → `requireAuth` middleware → same
    local `jwt.verify` → `next()` or 401.
-5. Access token expires after 15 minutes → `POST /api/auth/refresh` using the
+6. Access token expires after 15 minutes → `POST /api/auth/refresh` using the
    refresh-token cookie → new access-token cookie minted, no password needed.
-6. `POST /api/auth/logout` → both cookies cleared.
+7. `POST /api/auth/logout` → both cookies cleared.

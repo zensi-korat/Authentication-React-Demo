@@ -61,8 +61,17 @@ Status legend: ⬜ not started · 🔶 in progress · ✅ done
 
 ## Account lifecycle features
 
-- ⬜ **M12 — OTP fundamentals.** One-time codes: generate, store with expiry,
-  verify, invalidate after use. Applied to email verification at signup.
+- ✅ **M12 — OTP fundamentals.** New `demo_otps` table (`user_id`, `purpose`,
+  `code_hash`, `expires_at`, `consumed_at`). Signup generates a 6-digit code,
+  hashes it with bcrypt before storing (never plaintext), and "sends" it via a
+  console.log stand-in for a real email service. `POST /auth/verify-otp`
+  checks the hash + expiry and flips `demo_users.email_verified`;
+  `POST /auth/login` now rejects unverified accounts with a
+  `EMAIL_NOT_VERIFIED` code the client uses to route to `/verify-email`
+  instead of just showing a dead-end error. Issuing a new code invalidates
+  any still-active one first, so only the latest is ever valid — the same
+  `issueOtp()` helper is written generic (`purpose` field) so M13 can reuse
+  it for password reset.
 - ⬜ **M13 — Forgot password.** Reusing the OTP pattern to let a user reset their
   password without knowing the old one, safely.
 

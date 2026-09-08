@@ -7,18 +7,53 @@ import {
   verifyAccessToken,
   verifyRefreshToken,
 } from "../lib/jwt.js";
+import { generateOtp, hashOtp, compareOtp, otpExpiresAt } from "../lib/otp.js";
 
 // Rebuilding from scratch, one piece at a time, this time backed by a real
 // Supabase table instead of an in-memory array. Each route below is an empty
 // stub — we'll fill them in together as we cover each concept.
 
 const USERS_TABLE = "demo_users";
+const OTPS_TABLE = "demo_otps";
+const EMAIL_VERIFICATION_PURPOSE = "email_verification";
 const ACCESS_TOKEN_COOKIE = "access_token";
 const REFRESH_TOKEN_COOKIE = "refresh_token";
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const THIRTY_DAYS_MS = 60 * 60 * 24 * 30 * 1000;
 
 export const authRouter = Router();
+
+/**
+ * Generates a fresh OTP for a user, invalidates any still-active code for
+ * the same purpose (so only the latest one is ever valid), stores the HASH
+ * of the new code, and "sends" it by logging to the server console — a
+ * stand-in for a real email service (SendGrid, Resend, etc.), which this
+ * demo doesn't wire up on purpose to keep the focus on the OTP mechanics
+ * themselves (generate, store hashed, expire, invalidate after use).
+ */
+async function issueOtp({ userId, email, purpose }) {
+  await supabaseAdmin
+    .from(OTPS_TABLE)
+    .update({ consumed_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("purpose", purpose)
+    .is("consumed_at", null);
+
+  const code = generateOtp();
+
+  const { error } = await supabaseAdmin.from(OTPS_TABLE).insert({
+    user_id: userId,
+    purpose,
+    code_hash: hashOtp(code),
+    expires_at: otpExpiresAt(),
+  });
+
+  if (error) throw error;
+
+  console.log(
+    `[DEV] Verification code for ${email}: ${code} — a real app would email this instead of logging it`,
+  );
+}
 
 /**
  * POST /api/auth/signup — body: { email, password }
@@ -40,9 +75,11 @@ authRouter.post("/signup", async (req, res) => {
 
   const passwordHash = bcrypt.hashSync(password, 10);
 
-  const { error } = await supabaseAdmin
+  const { data: user, error } = await supabaseAdmin
     .from(USERS_TABLE)
-    .insert({ email, password_hash: passwordHash });
+    .insert({ email, password_hash: passwordHash, email_verified: false })
+    .select("id, email")
+    .single();
 
   if (error) {
     // Postgres error code 23505 = unique constraint violation — our `email
@@ -53,7 +90,110 @@ authRouter.post("/signup", async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 
-  res.status(201).json({ message: "Account created" });
+  await issueOtp({ userId: user.id, email: user.email, purpose: EMAIL_VERIFICATION_PURPOSE });
+
+  res.status(201).json({ message: "Account created. Check your email for a verification code." });
+});
+
+/**
+ * POST /api/auth/verify-otp — body: { email, code }
+ *
+ * Looks up the user's latest un-consumed email-verification OTP row,
+ * checks it hasn't expired, and compares the submitted code against the
+ * stored HASH (never a plaintext comparison, same reasoning as passwords).
+ * On success, marks the OTP consumed (so it can't be replayed) and flips
+ * `email_verified` to true.
+ */
+authRouter.post("/verify-otp", async (req, res) => {
+  const { email, code } = req.body ?? {};
+
+  if (typeof email !== "string" || typeof code !== "string") {
+    return res.status(400).json({ message: "Email and code are required" });
+  }
+
+  const { data: user, error: userError } = await supabaseAdmin
+    .from(USERS_TABLE)
+    .select("id, email_verified")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (userError) {
+    return res.status(500).json({ message: userError.message });
+  }
+  if (!user) {
+    return res.status(400).json({ message: "Invalid or expired code" });
+  }
+  if (user.email_verified) {
+    return res.status(400).json({ message: "Email is already verified" });
+  }
+
+  const { data: otp, error: otpError } = await supabaseAdmin
+    .from(OTPS_TABLE)
+    .select("id, code_hash, expires_at")
+    .eq("user_id", user.id)
+    .eq("purpose", EMAIL_VERIFICATION_PURPOSE)
+    .is("consumed_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (otpError) {
+    return res.status(500).json({ message: otpError.message });
+  }
+
+  const isExpired = !otp || new Date(otp.expires_at).getTime() < Date.now();
+  const codeMatches = otp && compareOtp(code, otp.code_hash);
+
+  if (isExpired || !codeMatches) {
+    return res.status(400).json({ message: "Invalid or expired code" });
+  }
+
+  await supabaseAdmin
+    .from(OTPS_TABLE)
+    .update({ consumed_at: new Date().toISOString() })
+    .eq("id", otp.id);
+
+  const { error: verifyError } = await supabaseAdmin
+    .from(USERS_TABLE)
+    .update({ email_verified: true })
+    .eq("id", user.id);
+
+  if (verifyError) {
+    return res.status(500).json({ message: verifyError.message });
+  }
+
+  res.json({ message: "Email verified" });
+});
+
+/**
+ * POST /api/auth/resend-otp — body: { email }
+ *
+ * Re-runs the same issueOtp() flow signup uses. Deliberately responds with
+ * the same generic message whether or not the email exists, so this
+ * endpoint can't be used to probe which emails are registered.
+ */
+authRouter.post("/resend-otp", async (req, res) => {
+  const { email } = req.body ?? {};
+
+  if (typeof email !== "string") {
+    return res.status(400).json({ message: "Email is required" });
+  }
+
+  const { data: user, error } = await supabaseAdmin
+    .from(USERS_TABLE)
+    .select("id, email, email_verified")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (error) {
+    return res.status(500).json({ message: error.message });
+  }
+
+  if (user && !user.email_verified) {
+    await issueOtp({ userId: user.id, email: user.email, purpose: EMAIL_VERIFICATION_PURPOSE });
+  }
+
+  res.json({ message: "If that account needs verification, a new code was sent." });
 });
 
 /**
@@ -72,7 +212,7 @@ authRouter.post("/login", async (req, res) => {
 
   const { data: user, error } = await supabaseAdmin
     .from(USERS_TABLE)
-    .select("id, email, password_hash")
+    .select("id, email, password_hash, email_verified")
     .eq("email", email)
     .maybeSingle();
 
@@ -87,6 +227,13 @@ authRouter.post("/login", async (req, res) => {
     // password is wrong — telling an attacker which one is true would leak
     // which emails are registered.
     return res.status(401).json({ message: "Invalid email or password" });
+  }
+
+  if (!user.email_verified) {
+    return res.status(403).json({
+      message: "Please verify your email before logging in",
+      code: "EMAIL_NOT_VERIFIED",
+    });
   }
 
   const accessToken = signAccessToken({ id: user.id, email: user.email });

@@ -15,11 +15,13 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [needsVerification, setNeedsVerification] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
+    setNeedsVerification(false);
     setIsSubmitting(true);
 
     try {
@@ -40,9 +42,15 @@ export function LoginPage() {
     } catch (err) {
       // isAxiosError narrows the type so TypeScript knows `err.response` and
       // `err.response.data` exist — axios's own error shape, not a plain Error.
-      const message = isAxiosError<{ message?: string }>(err)
+      const message = isAxiosError<{ message?: string; code?: string }>(err)
         ? (err.response?.data?.message ?? "Login failed")
         : "Something went wrong.";
+      // A 403 with this code means the password was right but the account
+      // hasn't completed the OTP email-verification step yet — point the
+      // user at /verify-email instead of just showing a dead-end error.
+      if (isAxiosError<{ code?: string }>(err) && err.response?.data?.code === "EMAIL_NOT_VERIFIED") {
+        setNeedsVerification(true);
+      }
       setError(message);
       toast.error(message);
     } finally {
@@ -84,6 +92,17 @@ export function LoginPage() {
             {error && (
               <p className="text-sm text-destructive" role="alert">
                 {error}
+                {needsVerification && (
+                  <>
+                    {" "}
+                    <Link
+                      to={`/verify-email?email=${encodeURIComponent(email)}`}
+                      className="underline underline-offset-2"
+                    >
+                      Verify now
+                    </Link>
+                  </>
+                )}
               </p>
             )}
             <Button type="submit" disabled={isSubmitting} className="mt-2">

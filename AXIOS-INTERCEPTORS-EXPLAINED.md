@@ -185,7 +185,9 @@ interceptor didn't exist.
     await refreshAccessToken();
     return api(originalRequest!);
   } catch (refreshError) {
-    window.location.href = "/login";
+    if (window.location.pathname !== "/login") {
+      window.location.href = "/login";
+    }
     return Promise.reject(refreshError);
   }
 ```
@@ -204,6 +206,15 @@ interceptor didn't exist.
   had never failed at all. It has no idea a refresh even happened.
 - `catch (refreshError)` — the refresh token is also dead; there is no way
   to silently recover a session at this point.
+- `if (window.location.pathname !== "/login")` — guards against a loop.
+  `useAuth.tsx` calls `GET /auth/me` on every page, including `/login`
+  itself, just to check "is there a session?" On `/login`, with no session
+  and no refresh token, that check 401s, the refresh attempt above also
+  401s, and without this guard the code below would reload `/login` — which
+  re-mounts the app, re-runs the same `/auth/me` check, and repeats forever.
+  Skipping the redirect when we're already there breaks that cycle; the page
+  is already showing the right thing (a login form), so there's nothing to
+  redirect *to*.
 - `window.location.href = "/login";` — a **hard redirect**, not React
   Router's `navigate()`. This code runs outside any React component (it's
   plain module-level code, not a hook), so it doesn't have access to

@@ -21,12 +21,13 @@ export function SignupPage() {
     setIsSubmitting(true);
 
     try {
-      // Just creates the account — no cookies are set here. The user signs
-      // in separately on /login with the credentials they just created.
+      // Just creates the account — no cookies are set here. The account
+      // starts unverified (email_verified: false server-side), so we send
+      // the user to enter the OTP we just generated before they can log in.
       await api.post("/auth/signup", { email, password });
 
-      toast.success("Account created. Sign in to continue.");
-      navigate("/login");
+      toast.success("Account created. Check your email for a verification code.");
+      navigate(`/verify-email?email=${encodeURIComponent(email)}`);
     } catch (err) {
       const message = isAxiosError<{ message?: string }>(err)
         ? (err.response?.data?.message ?? "Signup failed")

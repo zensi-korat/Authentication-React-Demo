@@ -72,7 +72,15 @@ api.interceptors.response.use(
       // Refresh token is invalid/expired too — there's no way to silently
       // recover. Send the user to a real login instead of leaving them
       // staring at a broken page.
-      window.location.href = "/login";
+      //
+      // Guard against redirecting when we're already there: without this,
+      // an unauthenticated visit to /login triggers useAuth's initial
+      // GET /auth/me check, which 401s, which fails to refresh (no session
+      // exists yet), which would reload /login, which re-triggers the same
+      // check — an infinite reload loop.
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
       return Promise.reject(refreshError);
     }
   },
