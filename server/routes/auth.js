@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { supabaseAdmin } from "../lib/supabase-admin.js";
@@ -8,6 +9,7 @@ import {
   verifyRefreshToken,
 } from "../lib/jwt.js";
 import { generateOtp, hashOtp, compareOtp, otpExpiresAt } from "../lib/otp.js";
+import { buildGoogleAuthUrl, verifyGoogleAuthCode } from "../lib/google-oauth.js";
 
 // Rebuilding from scratch, one piece at a time, this time backed by a real
 // Supabase table instead of an in-memory array. Each route below is an empty
@@ -18,10 +20,39 @@ const OTPS_TABLE = "demo_otps";
 const EMAIL_VERIFICATION_PURPOSE = "email_verification";
 const ACCESS_TOKEN_COOKIE = "access_token";
 const REFRESH_TOKEN_COOKIE = "refresh_token";
+const OAUTH_STATE_COOKIE = "oauth_state";
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const THIRTY_DAYS_MS = 60 * 60 * 24 * 30 * 1000;
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
+// The client origin OAuth redirects should land back on — derived from the
+// same env var Google itself is configured with, instead of a new one.
+const CLIENT_ORIGIN = new URL(process.env.GOOGLE_REDIRECT_URI).origin;
 
 export const authRouter = Router();
+
+/**
+ * Signs both JWTs for a user and sets them as httpOnly cookies — the exact
+ * same two res.cookie() calls POST /login already made, now shared with
+ * GET /google/callback so the "how a session gets created" logic exists in
+ * exactly one place regardless of which door the user came in through.
+ */
+function setAuthCookies(res, user) {
+  const accessToken = signAccessToken({ id: user.id, email: user.email });
+  const refreshToken = signRefreshToken({ id: user.id });
+
+  res.cookie(ACCESS_TOKEN_COOKIE, accessToken, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: FIFTEEN_MINUTES_MS,
+  });
+  res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: THIRTY_DAYS_MS,
+  });
+}
 
 /**
  * Generates a fresh OTP for a user, invalidates any still-active code for
@@ -30,6 +61,12 @@ export const authRouter = Router();
  * stand-in for a real email service (SendGrid, Resend, etc.), which this
  * demo doesn't wire up on purpose to keep the focus on the OTP mechanics
  * themselves (generate, store hashed, expire, invalidate after use).
+ *
+ * Returns the raw code so the route handler can *also* echo it back in the
+ * API response (as `devCode`) purely so the client can console.log it for
+ * this demo — a real app would never put a verification code in a JSON
+ * response, since anything the browser can read, an attacker on the same
+ * machine/network could too.
  */
 async function issueOtp({ userId, email, purpose }) {
   await supabaseAdmin
@@ -53,6 +90,8 @@ async function issueOtp({ userId, email, purpose }) {
   console.log(
     `[DEV] Verification code for ${email}: ${code} — a real app would email this instead of logging it`,
   );
+
+  return code;
 }
 
 /**
@@ -90,9 +129,16 @@ authRouter.post("/signup", async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 
-  await issueOtp({ userId: user.id, email: user.email, purpose: EMAIL_VERIFICATION_PURPOSE });
+  const devCode = await issueOtp({
+    userId: user.id,
+    email: user.email,
+    purpose: EMAIL_VERIFICATION_PURPOSE,
+  });
 
-  res.status(201).json({ message: "Account created. Check your email for a verification code." });
+  res.status(201).json({
+    message: "Account created. Check your email for a verification code.",
+    devCode, // demo-only convenience; see the comment on issueOtp()
+  });
 });
 
 /**
@@ -189,11 +235,19 @@ authRouter.post("/resend-otp", async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 
+  let devCode;
   if (user && !user.email_verified) {
-    await issueOtp({ userId: user.id, email: user.email, purpose: EMAIL_VERIFICATION_PURPOSE });
+    devCode = await issueOtp({
+      userId: user.id,
+      email: user.email,
+      purpose: EMAIL_VERIFICATION_PURPOSE,
+    });
   }
 
-  res.json({ message: "If that account needs verification, a new code was sent." });
+  res.json({
+    message: "If that account needs verification, a new code was sent.",
+    devCode, // demo-only convenience; see the comment on issueOtp()
+  });
 });
 
 /**
@@ -220,7 +274,11 @@ authRouter.post("/login", async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 
-  const passwordMatches = user && bcrypt.compareSync(password, user.password_hash);
+  // user.password_hash is null for Google-only accounts (see GET
+  // /google/callback) — guard against passing null to bcrypt, which would
+  // throw, instead of letting it fail cleanly as "wrong password."
+  const passwordMatches =
+    user && user.password_hash && bcrypt.compareSync(password, user.password_hash);
 
   if (!passwordMatches) {
     // Deliberately the SAME message whether the email doesn't exist or the
@@ -236,25 +294,104 @@ authRouter.post("/login", async (req, res) => {
     });
   }
 
-  const accessToken = signAccessToken({ id: user.id, email: user.email });
-  const refreshToken = signRefreshToken({ id: user.id });
-
-  // httpOnly = page JS can't read this cookie (anti-theft). maxAge is in
-  // MILLISECONDS for Express, matching each token's own expiry.
-  res.cookie(ACCESS_TOKEN_COOKIE, accessToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: FIFTEEN_MINUTES_MS,
-  });
-  res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: THIRTY_DAYS_MS,
-  });
+  setAuthCookies(res, user);
 
   res.json({ user: { id: user.id, email: user.email } });
+});
+
+/**
+ * GET /api/auth/google — step 1 of the redirect flow. Not an axios/fetch
+ * call from the client; the browser navigates here directly
+ * (window.location.href), because what happens next is a redirect to a
+ * DIFFERENT origin (accounts.google.com) — something only a real page
+ * navigation can do.
+ *
+ * Generates a random `state`, stashes it in a short-lived httpOnly cookie,
+ * and redirects to Google with that same value attached. The callback below
+ * checks the two match — this is CSRF protection for the OAuth flow itself
+ * (see OTP-EMAIL-VERIFICATION-EXPLAINED.md-style reasoning: never trust a
+ * callback without proving it's the one *you* started).
+ */
+authRouter.get("/google", (_req, res) => {
+  const state = randomBytes(16).toString("hex");
+
+  res.cookie(OAUTH_STATE_COOKIE, state, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: FIVE_MINUTES_MS,
+  });
+
+  res.redirect(buildGoogleAuthUrl(state));
+});
+
+/**
+ * GET /api/auth/google/callback — step 2. Google redirects the browser
+ * here with `code` (a one-time claim ticket) and `state` (echoed back
+ * unchanged) as query params.
+ *
+ * On success, this does exactly what POST /login does after a successful
+ * password check (setAuthCookies) — OAuth only replaces "how do we know
+ * this is really them," not anything downstream of that.
+ */
+authRouter.get("/google/callback", async (req, res) => {
+  const { code, state } = req.query;
+  const expectedState = req.cookies[OAUTH_STATE_COOKIE];
+  res.clearCookie(OAUTH_STATE_COOKIE, { path: "/" }); // single-use, like an OTP
+
+  if (
+    typeof code !== "string" ||
+    typeof state !== "string" ||
+    !expectedState ||
+    state !== expectedState
+  ) {
+    return res.redirect(`${CLIENT_ORIGIN}/login?error=oauth_failed`);
+  }
+
+  try {
+    const { email } = await verifyGoogleAuthCode(code);
+
+    const { data: existingUser, error: lookupError } = await supabaseAdmin
+      .from(USERS_TABLE)
+      .select("id, email, email_verified")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (lookupError) throw lookupError;
+
+    let user = existingUser;
+
+    if (!user) {
+      // First time this email has been seen — create a Google-only account.
+      // No password_hash (Google is the only way in), and no OTP needed:
+      // Google already proved this email belongs to whoever just logged in.
+      const { data: newUser, error: insertError } = await supabaseAdmin
+        .from(USERS_TABLE)
+        .insert({ email, password_hash: null, email_verified: true })
+        .select("id, email, email_verified")
+        .single();
+
+      if (insertError) throw insertError;
+      user = newUser;
+    } else if (!user.email_verified) {
+      // An existing account signed up with a password but never finished
+      // OTP verification — Google's proof is at least as strong, so unblock
+      // it here too rather than making them separately complete the OTP flow.
+      const { error: verifyError } = await supabaseAdmin
+        .from(USERS_TABLE)
+        .update({ email_verified: true })
+        .eq("id", user.id);
+
+      if (verifyError) throw verifyError;
+    }
+
+    setAuthCookies(res, user);
+
+    res.redirect(CLIENT_ORIGIN);
+  } catch (err) {
+    console.error("Google OAuth callback failed:", err.message);
+    res.redirect(`${CLIENT_ORIGIN}/login?error=oauth_failed`);
+  }
 });
 
 /** POST /api/auth/logout — clears both cookies. */

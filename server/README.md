@@ -34,9 +34,10 @@ server/
 ├── lib/
 │   ├── jwt.js             Sign/verify JWTs (access + refresh tokens)
 │   ├── otp.js             Generate/hash/compare OTP codes (pure, no DB)
+│   ├── google-oauth.js    Build the Google redirect URL, exchange a code, verify the id_token
 │   └── supabase-admin.js  The one Supabase client — talks to Postgres directly
 └── routes/
-    ├── auth.js            signup, verify-otp, resend-otp, login, logout, me, refresh
+    ├── auth.js            signup, verify-otp, resend-otp, login, google, google/callback, logout, me, refresh
     └── consumers.js       CRUD for the demo consumers table + the requireAuth guard
 ```
 
@@ -73,10 +74,12 @@ use Supabase's own auth rules at all; every access check is our own
 
 | Route | What happens |
 |---|---|
-| `POST /signup` | Validate input → `bcrypt.hashSync` the password → insert a row into `demo_users` (`email_verified: false`) → generate + store a hashed OTP → console.log the raw code (stand-in for a real email service). Rejects duplicate emails (Postgres `unique` constraint, error code `23505`). |
+| `POST /signup` | Validate input → `bcrypt.hashSync` the password → insert a row into `demo_users` (`email_verified: false`) → generate + store a hashed OTP → console.log the raw code (stand-in for a real email service) and also echo it back as `devCode` in the response so the client can print it too. Rejects duplicate emails (Postgres `unique` constraint, error code `23505`). |
 | `POST /verify-otp` | Look up the user's latest un-consumed `email_verification` OTP row → check expiry + `compareOtp` against the hash → mark it consumed → flip `demo_users.email_verified` to true. |
 | `POST /resend-otp` | Re-runs the same generate/invalidate-old/store/console.log flow as signup. Always returns the same generic message, verified or not, so it can't be used to probe which emails are registered. |
-| `POST /login` | Look up the row by email → `bcrypt.compareSync` the password → reject with `403 { code: "EMAIL_NOT_VERIFIED" }` if `email_verified` is false → sign both tokens → set them as httpOnly cookies → return `{ user }` (never the token itself). |
+| `POST /login` | Look up the row by email → `bcrypt.compareSync` the password (guarded against a `null` `password_hash` for Google-only accounts) → reject with `403 { code: "EMAIL_NOT_VERIFIED" }` if `email_verified` is false → sign both tokens → set them as httpOnly cookies → return `{ user }` (never the token itself). |
+| `GET /google` | Full browser redirect (not called via axios) → generates a random `state`, stores it in a short-lived `oauth_state` cookie, redirects to Google's consent screen. |
+| `GET /google/callback` | Google redirects here with `code` + `state` → checks `state` against the cookie → exchanges `code` + verifies the `id_token` (`lib/google-oauth.js`) → finds/creates the `demo_users` row by email (`password_hash: null`, `email_verified: true` for new rows) → same `setAuthCookies` as `/login` → redirects to the dashboard, or to `/login?error=oauth_failed` on any failure. |
 | `POST /logout` | Clear both cookies. |
 | `GET /me` | Read the `access_token` cookie → `verifyAccessToken` → return `{ user }` or 401. This is how the frontend checks "am I logged in?" on page load. |
 | `POST /refresh` | Read the `refresh_token` cookie → `verifyRefreshToken` → re-fetch the user from Supabase → sign a fresh access token. Lets the session continue without asking for the password again. |
@@ -97,8 +100,9 @@ Two unrelated things share this file:
 |---|---|---|
 | `access_token` | 15 minutes | Sent on every request; proves who you are |
 | `refresh_token` | 30 days | Sent only to `/api/auth/refresh`; renews the access token |
+| `oauth_state` | 5 minutes | Set by `GET /google`, checked (and cleared) by `GET /google/callback` — CSRF protection for the OAuth redirect, not a session cookie |
 
-Both are `httpOnly` (JavaScript in the browser can't read them),
+All three are `httpOnly` (JavaScript in the browser can't read them),
 `sameSite: "lax"`, `path: "/"`.
 
 ## Env vars (`.env`)
@@ -110,10 +114,15 @@ Both are `httpOnly` (JavaScript in the browser can't read them),
 | `SUPABASE_SERVICE_ROLE_KEY` | `lib/supabase-admin.js` |
 | `JWT_ACCESS_SECRET` | `lib/jwt.js` |
 | `JWT_REFRESH_SECRET` | `lib/jwt.js` |
+| `GOOGLE_CLIENT_ID` | `lib/google-oauth.js` |
+| `GOOGLE_CLIENT_SECRET` | `lib/google-oauth.js` — server-only, never sent to the browser |
+| `GOOGLE_REDIRECT_URI` | `lib/google-oauth.js` — must exactly match the redirect URI registered in the Google Cloud Console client |
 
 ## Database tables (Supabase Postgres, not in this repo — created via the SQL Editor)
 
-- `demo_users (id uuid, email text unique, password_hash text, email_verified boolean, created_at timestamptz)`
+- `demo_users (id uuid, email text unique, password_hash text NULLABLE, email_verified boolean, created_at timestamptz)` —
+  `password_hash` was made nullable to support Google-only accounts (no local
+  password ever set): `alter table demo_users alter column password_hash drop not null;`
 - `demo_consumers (id, consumer_number, first_name, middle_name, last_name, email, account_status)`
 - `demo_otps (id uuid, user_id uuid references demo_users, purpose text, code_hash text, expires_at timestamptz, consumed_at timestamptz, created_at timestamptz)` —
   `purpose` is `"email_verification"` today; M13 (forgot password) will reuse this

@@ -77,10 +77,21 @@ Status legend: ⬜ not started · 🔶 in progress · ✅ done
 
 ## Beyond this app
 
-- ⬜ **M14 — OAuth (concept + how it'd integrate).** Third-party login (e.g.
-  "Sign in with Google"): what a redirect flow is, what an authorization code is,
-  how the app would exchange it for its own session — how this differs from the
-  password+JWT flow we built ourselves.
+- ✅ **M14 — OAuth ("Sign in with Google"), end to end.** Went further than
+  "concept only" — a real working Google OAuth 2.0 / OIDC integration.
+  `GET /api/auth/google` redirects to Google with a random `state` stashed in
+  a short-lived cookie (CSRF protection for the redirect itself);
+  `GET /api/auth/google/callback` checks `state`, exchanges the `code`
+  server-to-server for an `id_token`, verifies its signature/audience via
+  `google-auth-library` (Google's own RS256/JWKS verifier — hand-rolling key
+  rotation wasn't worth it next to what HS256 already teaches in M2), then
+  finds-or-creates a `demo_users` row by email and calls the exact same
+  `setAuthCookies()` helper `POST /login` uses. OAuth only ever replaces
+  "check a password" — every downstream step (JWTs, httpOnly cookies,
+  `requireAuth`) is the identical machinery from M2–M9. Google-only accounts
+  get `password_hash: null` (column made nullable for this) and
+  `email_verified: true` immediately, since Google already proved the email —
+  a direct callback to M12's OTP work.
 
 ---
 *Update the status markers as we complete each milestone.*

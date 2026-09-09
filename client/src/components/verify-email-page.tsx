@@ -3,10 +3,11 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { OtpInput } from "@/components/ui/otp-input";
 import { api } from "@/lib/axios";
 import { isAxiosError } from "axios";
+
+const CODE_LENGTH = 6;
 
 export function VerifyEmailPage() {
   const navigate = useNavigate();
@@ -40,7 +41,12 @@ export function VerifyEmailPage() {
   async function handleResend() {
     setIsResending(true);
     try {
-      await api.post("/auth/resend-otp", { email });
+      const { data } = await api.post<{ devCode?: string }>("/auth/resend-otp", { email });
+      // Demo-only: printed here instead of making you check the server
+      // terminal — see the comment on issueOtp() in routes/auth.js.
+      if (data.devCode) {
+        console.log(`[DEV] Verification code for ${email}: ${data.devCode}`);
+      }
       toast.success("If that account needs verification, a new code was sent.");
     } catch {
       toast.error("Something went wrong.");
@@ -58,32 +64,29 @@ export function VerifyEmailPage() {
             Enter the 6-digit code we sent to <span className="font-medium">{email}</span>.
             <br />
             <span className="text-xs">
-              (Demo mode: this app has no email service wired up — check the server terminal
-              for a line starting with "[DEV] Verification code for...".)
+              (Demo mode: this app has no email service wired up — the code was printed to
+              your browser console and the server terminal, both prefixed "[DEV]".)
             </span>
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="code">Verification code</Label>
-              <Input
-                id="code"
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
-              />
-            </div>
+            <OtpInput
+              length={CODE_LENGTH}
+              value={code}
+              onChange={setCode}
+              disabled={isSubmitting}
+            />
             {error && (
               <p className="text-sm text-destructive" role="alert">
                 {error}
               </p>
             )}
-            <Button type="submit" disabled={isSubmitting} className="mt-2">
+            <Button
+              type="submit"
+              disabled={isSubmitting || code.length !== CODE_LENGTH}
+              className="mt-2"
+            >
               {isSubmitting ? "Verifying..." : "Verify"}
             </Button>
             <Button

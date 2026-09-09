@@ -1,10 +1,12 @@
-import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
+import { GoogleSignInButton } from "@/components/google-signin-button";
 import { useAuth } from "@/features/auth/useAuth";
 import { api } from "@/lib/axios";
 import { isAxiosError } from "axios";
@@ -12,11 +14,22 @@ import { isAxiosError } from "axios";
 export function LoginPage() {
   const navigate = useNavigate();
   const { refresh } = useAuth();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [needsVerification, setNeedsVerification] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    // The full-page redirect back from GET /auth/google/callback lands here
+    // with this query param on failure — there's no axios call to attach a
+    // .catch to for that flow, so this is how the SPA finds out something
+    // went wrong on the way back from Google.
+    if (searchParams.get("error") === "oauth_failed") {
+      toast.error("Google sign-in failed. Please try again.");
+    }
+  }, [searchParams]);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -80,9 +93,8 @@ export function LoginPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="password">Password</Label>
-              <Input
+              <PasswordInput
                 id="password"
-                type="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -108,6 +120,11 @@ export function LoginPage() {
             <Button type="submit" disabled={isSubmitting} className="mt-2">
               {isSubmitting ? "Signing in..." : "Sign in"}
             </Button>
+            <div className="relative text-center text-xs text-muted-foreground">
+              <span className="bg-card px-2 relative z-10">or</span>
+              <div className="absolute inset-x-0 top-1/2 border-t" />
+            </div>
+            <GoogleSignInButton />
             <p className="text-xs text-muted-foreground text-center">
               Don&apos;t have an account?{" "}
               <Link to="/signup" className="underline underline-offset-2">
